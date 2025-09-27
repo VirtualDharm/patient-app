@@ -4,7 +4,6 @@ import { SafeAreaView, View, Text, Button, StyleSheet } from 'react-native';
 import AgoraUIKit from 'agora-rn-uikit';
 import { io } from 'socket.io-client';
 
-// --- CONFIG ---
 const APP_ID = '60bdf4f5f1b641f583d20d28d7a923d1';
 const SIGNALING_SERVER = 'https://server-w411.onrender.com';
 const MY_USER_ID = 'patient';
@@ -19,7 +18,6 @@ export default function App() {
   const [uid, setUid] = useState(null);
   const [log, setLog] = useState('');
 
-  // connect socket and register
   useEffect(() => {
     const socket = io(SIGNALING_SERVER, { transports: ['websocket'] });
     socketRef.current = socket;
@@ -46,7 +44,6 @@ export default function App() {
       setCallingState('idle');
     });
 
-    // peer hung up
     socket.on('end_call', () => {
       appendLog('peer ended the call');
       cleanupCall();
@@ -74,23 +71,38 @@ export default function App() {
     const channelName = `call_${Date.now()}`;
     const callerUid = Math.floor(Math.random() * 1000000);
     appendLog(`requesting token for channel ${channelName}, uid ${callerUid}`);
+
     try {
       const resp = await fetch(
         `${SIGNALING_SERVER}/rtcToken?channelName=${encodeURIComponent(channelName)}&uid=${callerUid}`
       );
       const data = await resp.json();
       if (!data.rtcToken) throw new Error(JSON.stringify(data));
+
       setToken(data.rtcToken);
       setUid(callerUid);
       setChannel(channelName);
 
+      // Send call invite to doctor via server (sockets + push notification)
       socketRef.current.emit('call', {
         to: CALLEE_ID,
         from: MY_USER_ID,
         channel: channelName,
         callerUid,
       });
-      appendLog('sent call invite to doctor');
+
+      // Also trigger push notification through server endpoint
+      await fetch(`${SIGNALING_SERVER}/sendPush`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          to: CALLEE_ID,
+          from: MY_USER_ID,
+          channel: channelName,
+        }),
+      });
+
+      appendLog('sent call invite + push to doctor');
     } catch (err) {
       appendLog('token error: ' + err.toString());
       setCallingState('idle');
@@ -101,14 +113,14 @@ export default function App() {
     return (
       <SafeAreaView style={{ flex: 1 }}>
         <AgoraUIKit
-            connectionData={{ appId: APP_ID, channel, token, uid }}
-            settings={{}}
-            rtcCallbacks={{
-                EndCall: () => {
-                    socketRef.current?.emit('end_call', { to: CALLEE_ID, from: MY_USER_ID });
-                    cleanupCall();
-                },
-            }}
+          connectionData={{ appId: APP_ID, channel, token, uid }}
+          settings={{}}
+          rtcCallbacks={{
+            EndCall: () => {
+              socketRef.current?.emit('end_call', { to: CALLEE_ID, from: MY_USER_ID });
+              cleanupCall();
+            },
+          }}
         />
       </SafeAreaView>
     );
@@ -117,7 +129,8 @@ export default function App() {
   return (
     <SafeAreaView style={{ flex: 1, padding: 20 }}>
       <Text style={styles.title}>Patient — Call Doctor</Text>
-      <Button title={callingState === 'calling' ? 'Calling...' : 'Call Doctor'}
+      <Button
+        title={callingState === 'calling' ? 'Calling...' : 'Call Doctor'}
         onPress={startCall}
         disabled={callingState === 'calling'}
       />
